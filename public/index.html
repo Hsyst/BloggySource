@@ -1,0 +1,1039 @@
+<!doctype html>
+<html lang="pt-BR">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>BloggySource</title>
+        <script src="https://cdn.tailwindcss.com"></script>
+        <meta name="color-scheme" content="dark light" />
+
+        <style>
+            html {
+                scroll-behavior: smooth;
+            }
+            body {
+                background: #18181b;
+                color: #fafafa;
+            }
+            .fade-in {
+                animation: fadeIn 0.5s;
+            }
+            @keyframes fadeIn {
+                from {
+                    opacity: 0;
+                }
+                to {
+                    opacity: 1;
+                }
+            }
+            .prose
+                :where(h1, h2, h3, h4, h5, h6, p, ul, ol, li, blockquote, pre) {
+                color: #fafafa;
+            }
+        </style>
+    </head>
+    <body class="min-h-screen flex flex-col bg-zinc-900">
+        <header
+            class="bg-gradient-to-r from-violet-900 to-violet-600 px-4 py-2 flex items-center justify-between shadow-lg"
+        >
+            <div class="flex items-center gap-2">
+                <span
+                    class="font-bold text-2xl tracking-widest text-white select-none"
+                    >BloggySource</span
+                >
+            </div>
+            <nav id="navbar" class="flex gap-2"></nav>
+        </header>
+        <main
+            id="app"
+            class="flex-1 w-full max-w-3xl mx-auto px-2 py-6 fade-in"
+        >
+            <!-- SPA content -->
+        </main>
+        <footer class="bg-zinc-950 text-zinc-300 text-center py-3 text-xs">
+            &copy; BloggySource &mdash; Feito com
+            <span class="text-violet-400">♥ by Thais (op3n/op3ny)</span>
+        </footer>
+        <div id="modal-root"></div>
+        <script>
+            // --- SPA State ---
+            let state = {
+                user: null,
+                csrfToken: "",
+                posts: [],
+                categories: [],
+                current: "home",
+                currentPost: null,
+                dashboardStats: null,
+                users: [],
+                moderationComments: [],
+                error: null,
+                success: null,
+                loading: false,
+                viewPostId: null, // para controle de views
+            };
+
+            // --- Utility Functions ---
+            function setState(newState) {
+                state = { ...state, ...newState };
+                render();
+            }
+            function showError(msg) {
+                setState({ error: msg, success: null });
+            }
+            function showSuccess(msg) {
+                setState({ success: msg, error: null });
+            }
+            function clearMessages() {
+                setState({ error: null, success: null });
+            }
+            function api(url, options = {}) {
+                options.headers = options.headers || {};
+                options.headers["Content-Type"] = "application/json";
+                if (state.csrfToken)
+                    options.headers["X-CSRF-Token"] = state.csrfToken;
+                options.credentials = "include";
+                return fetch(url, options).then(async (r) => {
+                    if (r.status === 401) {
+                        setState({ user: null });
+                        throw new Error("Não autenticado");
+                    }
+                    if (r.status === 403) throw new Error("Acesso negado");
+                    if (!r.ok) {
+                        let data;
+                        try {
+                            data = await r.json();
+                        } catch {}
+                        throw new Error(data?.error || "Erro desconhecido");
+                    }
+                    return r.json();
+                });
+            }
+            function formatDate(dt) {
+                return new Date(dt).toLocaleString("pt-BR", {
+                    dateStyle: "short",
+                    timeStyle: "short",
+                });
+            }
+            function isAdmin() {
+                return state.user && state.user.isAdmin;
+            }
+            function isLogged() {
+                return !!state.user;
+            }
+            function isMyPost(post) {
+                return state.user && post.author === state.user.username;
+            }
+            function sleep(ms) {
+                return new Promise((r) => setTimeout(r, ms));
+            }
+
+            // --- SPA Navigation ---
+            function goto(page, params = {}) {
+                clearMessages();
+                if (page === "home") loadPosts();
+                if (page === "dashboard" && isAdmin()) loadDashboard();
+                if (page === "users" && isAdmin()) loadUsers();
+                if (page === "moderation" && isAdmin()) loadModeration();
+                setState({ current: page, ...params });
+                window.scrollTo({ top: 0, behavior: "smooth" });
+            }
+
+            // --- Initial Load ---
+            async function init() {
+                await getCSRF();
+                await checkSession();
+                await loadCategories();
+                await loadPosts();
+                render();
+                registerGlobalListeners();
+            }
+
+            // --- API Calls ---
+            async function getCSRF() {
+                try {
+                    const data = await fetch("/api/csrf-token", {
+                        credentials: "include",
+                    }).then((r) => r.json());
+                    state.csrfToken = data.csrfToken;
+                } catch {
+                    showError("Erro ao obter token CSRF");
+                }
+            }
+            async function checkSession() {
+                try {
+                    const data = await api("/api/me");
+                    setState({ user: data.user });
+                } catch {
+                    setState({ user: null });
+                }
+            }
+            async function loadPosts() {
+                try {
+                    setState({ loading: true });
+                    const posts = await api("/api/posts");
+                    setState({ posts, loading: false });
+                } catch (e) {
+                    showError(e.message);
+                    setState({ loading: false });
+                }
+            }
+            async function loadCategories() {
+                try {
+                    const categories = await api("/api/categories");
+                    setState({ categories });
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function loadDashboard() {
+                try {
+                    const stats = await api("/api/dashboard/stats");
+                    setState({ dashboardStats: stats });
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function loadUsers() {
+                try {
+                    const users = await api("/api/users");
+                    setState({ users });
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function loadModeration() {
+                try {
+                    const comments = await api("/api/moderation/comments");
+                    setState({ moderationComments: comments });
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function loadPost(id) {
+                try {
+                    setState({ loading: true });
+                    // Controle de views: só incrementa se não for o mesmo post da última visualização
+                    if (state.viewPostId !== id) {
+                        state.viewPostId = id;
+                    }
+                    const post = await api(`/api/posts/${id}`);
+                    setState({
+                        current: "post",
+                        currentPost: post,
+                        loading: false,
+                    });
+                } catch (e) {
+                    showError(e.message);
+                    setState({ loading: false });
+                }
+            }
+
+            // --- Auth ---
+            async function doLogin(ev) {
+                ev.preventDefault();
+                clearMessages();
+                const username = ev.target.username.value.trim();
+                const password = ev.target.password.value;
+                try {
+                    await getCSRF();
+                    const data = await api("/api/login", {
+                        method: "POST",
+                        body: JSON.stringify({ username, password }),
+                    });
+                    setState({ user: data.user, current: "home" });
+                    await loadPosts();
+                    showSuccess("Login realizado!");
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function doRegister(ev) {
+                ev.preventDefault();
+                clearMessages();
+                const username = ev.target.username.value.trim();
+                const email = ev.target.email.value.trim();
+                const password = ev.target.password.value;
+                const confirmPassword = ev.target.confirmPassword.value;
+                try {
+                    await getCSRF();
+                    await api("/api/register", {
+                        method: "POST",
+                        body: JSON.stringify({
+                            username,
+                            email,
+                            password,
+                            confirmPassword,
+                        }),
+                    });
+                    showSuccess("Cadastro realizado! Faça login.");
+                    goto("login");
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function doLogout() {
+                try {
+                    await getCSRF();
+                    await api("/api/logout", { method: "POST" });
+                    setState({ user: null, current: "home" });
+                    showSuccess("Logout realizado!");
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+
+            // --- Posts ---
+            async function createOrEditPost(
+                ev,
+                editing = false,
+                postId = null,
+            ) {
+                ev.preventDefault();
+                clearMessages();
+                const title = ev.target.title.value.trim();
+                const content = ev.target.content.value.trim();
+                const description = ev.target.description.value.trim();
+                const image_url = ev.target.image_url.value.trim();
+                const categories = Array.from(
+                    ev.target.categories.selectedOptions,
+                ).map((o) => o.value);
+                try {
+                    await getCSRF();
+                    if (editing) {
+                        await api(`/api/posts/${postId}`, {
+                            method: "PUT",
+                            body: JSON.stringify({
+                                title,
+                                content,
+                                description,
+                                image_url,
+                                categories,
+                            }),
+                        });
+                        showSuccess("Post atualizado!");
+                        await loadPost(postId);
+                    } else {
+                        await api("/api/posts", {
+                            method: "POST",
+                            body: JSON.stringify({
+                                title,
+                                content,
+                                description,
+                                image_url,
+                                categories,
+                            }),
+                        });
+                        showSuccess("Post criado!");
+                        goto("home");
+                    }
+                    await loadPosts();
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function deletePost(id) {
+                if (
+                    !(await showConfirm(
+                        "Tem certeza que deseja excluir este post?",
+                    ))
+                )
+                    return;
+                try {
+                    await getCSRF();
+                    await api(`/api/posts/${id}`, { method: "DELETE" });
+                    showSuccess("Post excluído!");
+                    goto("home");
+                    await loadPosts();
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+
+            // --- Comments ---
+            async function addComment(ev, postId) {
+                ev.preventDefault();
+                clearMessages();
+                const content = ev.target.content.value.trim();
+                if (!content) return showError("Comentário não pode ser vazio");
+                try {
+                    await getCSRF();
+                    await api(`/api/posts/${postId}/comments`, {
+                        method: "POST",
+                        body: JSON.stringify({ content }),
+                    });
+                    showSuccess("Comentário enviado!");
+                    await loadPost(postId);
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+
+            // --- Categories ---
+            async function createCategory(ev) {
+                ev.preventDefault();
+                clearMessages();
+                const name = ev.target.name.value.trim();
+                if (!name) return showError("Nome obrigatório");
+                try {
+                    await getCSRF();
+                    await api("/api/categories", {
+                        method: "POST",
+                        body: JSON.stringify({ name }),
+                    });
+                    showSuccess("Categoria criada!");
+                    await loadCategories();
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function deleteCategory(id) {
+                if (!(await showConfirm("Excluir esta categoria?"))) return;
+                try {
+                    await getCSRF();
+                    await api(`/api/categories/${id}`, { method: "DELETE" });
+                    showSuccess("Categoria excluída!");
+                    await loadCategories();
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+
+            // --- Moderation ---
+            async function approveComment(id) {
+                try {
+                    await getCSRF();
+                    await api(`/api/moderation/comments/${id}/approve`, {
+                        method: "POST",
+                    });
+                    showSuccess("Comentário aprovado!");
+                    await loadModeration();
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function rejectComment(id, reason) {
+                try {
+                    await getCSRF();
+                    await api(`/api/moderation/comments/${id}/reject`, {
+                        method: "POST",
+                        body: JSON.stringify({ reason }),
+                    });
+                    showSuccess("Comentário rejeitado!");
+                    await loadModeration();
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+
+            // --- Users/Admin ---
+            async function toggleAdmin(userId, is_admin) {
+                try {
+                    await getCSRF();
+                    await api(`/api/users/${userId}/admin`, {
+                        method: "PUT",
+                        body: JSON.stringify({ is_admin }),
+                    });
+                    showSuccess("Status atualizado!");
+                    await loadUsers();
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+            async function deleteUser(userId) {
+                if (!(await showConfirm("Excluir este usuário?"))) return;
+                try {
+                    await getCSRF();
+                    await api(`/api/users/${userId}`, { method: "DELETE" });
+                    showSuccess("Usuário excluído!");
+                    await loadUsers();
+                } catch (e) {
+                    showError(e.message);
+                }
+            }
+
+            // --- Modal/Confirm Dialog ---
+            function showConfirm(msg) {
+                return new Promise((resolve) => {
+                    const modal = document.createElement("div");
+                    modal.className =
+                        "fixed inset-0 flex items-center justify-center z-50 bg-black/70";
+                    modal.innerHTML = `
+          <div class="bg-zinc-900 rounded-lg shadow-xl p-6 max-w-xs w-full">
+            <div class="text-lg text-white mb-4">${msg}</div>
+            <div class="flex gap-2 justify-end">
+              <button id="confirm-yes" class="bg-violet-600 hover:bg-violet-700 px-4 py-1 rounded text-white">Sim</button>
+              <button id="confirm-no" class="bg-zinc-600 hover:bg-zinc-700 px-4 py-1 rounded text-white">Não</button>
+            </div>
+          </div>
+        `;
+                    document.body.appendChild(modal);
+                    modal.querySelector("#confirm-yes").onclick = () => {
+                        modal.remove();
+                        resolve(true);
+                    };
+                    modal.querySelector("#confirm-no").onclick = () => {
+                        modal.remove();
+                        resolve(false);
+                    };
+                });
+            }
+
+            // --- Render Functions ---
+            function renderNavbar() {
+                const nav = [];
+                nav.push(
+                    `<button data-action="goto" data-page="home" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "home" ? "bg-violet-800" : ""}">Início</button>`,
+                );
+                if (isLogged()) {
+                    nav.push(
+                        `<button data-action="goto" data-page="myposts" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "myposts" ? "bg-violet-800" : ""}">Meus Posts</button>`,
+                    );
+                    nav.push(
+                        `<button data-action="goto" data-page="newpost" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "newpost" ? "bg-violet-800" : ""}">Novo Post</button>`,
+                    );
+                    nav.push(
+                        `<button data-action="goto" data-page="categories" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "categories" ? "bg-violet-800" : ""}">Categorias</button>`,
+                    );
+                    if (isAdmin()) {
+                        nav.push(
+                            `<button data-action="goto" data-page="dashboard" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "dashboard" ? "bg-violet-800" : ""}">Dashboard</button>`,
+                        );
+                        nav.push(
+                            `<button data-action="goto" data-page="users" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "users" ? "bg-violet-800" : ""}">Usuários</button>`,
+                        );
+                        nav.push(
+                            `<button data-action="goto" data-page="moderation" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "moderation" ? "bg-violet-800" : ""}">Moderação</button>`,
+                        );
+                    }
+                    nav.push(
+                        `<button data-action="logout" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700">Sair <span class="font-bold">(${state.user.username})</span></button>`,
+                    );
+                } else {
+                    nav.push(
+                        `<button data-action="goto" data-page="login" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "login" ? "bg-violet-800" : ""}">Login</button>`,
+                    );
+                    nav.push(
+                        `<button data-action="goto" data-page="register" class="px-3 py-1 rounded text-white font-medium hover:bg-violet-700 ${state.current === "register" ? "bg-violet-800" : ""}">Cadastro</button>`,
+                    );
+                }
+                document.getElementById("navbar").innerHTML = nav.join("");
+            }
+
+            function renderHome() {
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">Posts Recentes</h2>
+        <div class="flex flex-col gap-6">
+        ${
+            state.loading
+                ? `<div class="text-center py-10"><span class="animate-spin inline-block w-8 h-8 border-4 border-violet-600 border-t-transparent rounded-full"></span></div>`
+                : state.posts.length === 0
+                  ? "<p class='text-zinc-400'>Nenhum post ainda.</p>"
+                  : state.posts
+                        .map(
+                            (post) => `
+              <article class="card bg-zinc-800 rounded-lg shadow-lg flex flex-col md:flex-row gap-4 p-4 relative group hover:shadow-2xl transition">
+                ${post.image_url ? `<img src="${post.image_url}" class="w-full md:w-48 h-36 object-cover rounded-lg border-2 border-violet-800" alt="Capa do post">` : ""}
+                <div class="flex-1 flex flex-col justify-between">
+                  <header>
+                    <h3 class="post-title font-bold text-xl text-violet-400 cursor-pointer hover:underline" data-action="loadPost" data-id="${post.id}">${post.title}</h3>
+                    <div class="flex gap-2 flex-wrap mt-1 text-sm">${post.categories.map((c) => `<span class="bg-violet-900/70 text-violet-200 px-2 py-0.5 rounded">${c}</span>`).join(" ")}</div>
+                  </header>
+                  <p class="mt-2 text-zinc-300 line-clamp-2">${post.description || ""}</p>
+                  <footer class="flex items-center gap-2 mt-3 text-xs text-zinc-400">
+                    <span class="inline-flex items-center gap-1"><svg class="w-4 h-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg> ${post.author}</span>
+                    <span>•</span>
+                    <span>${formatDate(post.created_at)}</span>
+                    <span>•</span>
+                    <span class="inline-flex items-center gap-1"><svg class="w-4 h-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553 2.276A2 2 0 0121 14.118V17a2 2 0 01-2 2H5a2 2 0 01-2-2v-2.882a2 2 0 01.447-1.842L8 10" /></svg> ${post.views} visualizações</span>
+                  </footer>
+                </div>
+              </article>
+            `,
+                        )
+                        .join("")
+        }
+        </div>
+      `;
+            }
+
+            function renderPost() {
+                if (!state.currentPost) return "<p>Carregando...</p>";
+                const post = state.currentPost;
+                return `
+        <button data-action="goto" data-page="home" class="mb-4 text-violet-300 hover:underline flex items-center gap-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg> Voltar
+        </button>
+        <article class="bg-zinc-800 rounded-xl shadow-lg p-6 mb-6">
+          <header class="mb-4">
+            <h2 class="text-3xl font-extrabold text-violet-300">${post.title}</h2>
+            <div class="flex gap-2 flex-wrap mt-2">${post.categories.map((c) => `<span class="bg-violet-900/70 text-violet-200 px-2 py-0.5 rounded">${c.name}</span>`).join(" ")}</div>
+            <div class="mt-2 text-xs text-zinc-400 flex gap-2 items-center">
+              <span>Por <span class="font-semibold text-violet-200">${post.author}</span></span>
+              <span>•</span>
+              <span>${formatDate(post.created_at)}</span>
+              <span>•</span>
+              <span class="inline-flex items-center gap-1"><svg class="w-4 h-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553 2.276A2 2 0 0121 14.118V17a2 2 0 01-2 2H5a2 2 0 01-2-2v-2.882a2 2 0 01.447-1.842L8 10" /></svg> ${post.views} visualizações</span>
+            </div>
+          </header>
+          ${post.image_url ? `<img src="${post.image_url}" class="w-full max-h-96 object-cover rounded-lg border-2 border-violet-700 mb-4">` : ""}
+          <div class="prose prose-invert max-w-none text-lg">${post.content.replace(/\n/g, "<br>")}</div>
+          ${
+              isLogged() && (isMyPost(post) || isAdmin())
+                  ? `
+            <div class="mt-6 flex gap-2">
+              <button data-action="goto" data-page="editpost" data-id="${post.id}" class="bg-violet-700 hover:bg-violet-800 px-4 py-1 rounded text-white font-bold">Editar</button>
+              <button data-action="deletePost" data-id="${post.id}" class="bg-red-700 hover:bg-red-800 px-4 py-1 rounded text-white font-bold">Excluir</button>
+            </div>
+          `
+                  : ""
+          }
+        </article>
+        <section>
+          <h3 class="text-xl font-bold text-violet-300 mb-2">Comentários</h3>
+          ${
+              post.comments.length === 0
+                  ? "<p class='text-zinc-400'>Nenhum comentário.</p>"
+                  : post.comments
+                        .map(
+                            (c) => `
+              <div class="comment bg-zinc-900 border-l-4 border-violet-700 rounded-md p-3 mb-2">
+                <div class="text-zinc-200">${c.content.replace(/\n/g, "<br>")}</div>
+                <div class="author text-xs text-zinc-400 mt-1">Por ${c.author} • ${formatDate(c.created_at)}</div>
+              </div>
+            `,
+                        )
+                        .join("")
+          }
+          ${
+              isLogged()
+                  ? `
+            <form id="comment-form" class="mt-4 flex flex-col gap-2">
+              <label for="content" class="text-sm text-violet-200">Novo comentário:</label>
+              <textarea name="content" required minlength="2" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white"></textarea>
+              <button type="submit" class="self-end bg-violet-700 hover:bg-violet-800 px-4 py-1 rounded text-white font-bold">Comentar</button>
+            </form>
+          `
+                  : "<p class='text-zinc-400 mt-2'>Faça login para comentar.</p>"
+          }
+        </section>
+      `;
+            }
+
+            function renderLogin() {
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">Login</h2>
+        <form id="login-form" class="flex flex-col gap-3 max-w-sm mx-auto">
+          <label class="text-violet-200">Usuário
+            <input name="username" required autocomplete="username" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <label class="text-violet-200">Senha
+            <input name="password" type="password" required autocomplete="current-password" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <button type="submit" class="bg-violet-700 hover:bg-violet-800 px-4 py-2 rounded text-white font-bold mt-2">Entrar</button>
+        </form>
+        <p class="text-center mt-4 text-zinc-400">Não tem conta? <a href="#" data-action="goto" data-page="register" class="text-violet-400 hover:underline">Cadastre-se</a></p>
+      `;
+            }
+
+            function renderRegister() {
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">Cadastro</h2>
+        <form id="register-form" class="flex flex-col gap-3 max-w-sm mx-auto">
+          <label class="text-violet-200">Usuário
+            <input name="username" required minlength="3" maxlength="30" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <label class="text-violet-200">Email
+            <input name="email" type="email" required class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <label class="text-violet-200">Senha
+            <input name="password" type="password" required minlength="8" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <label class="text-violet-200">Confirme a Senha
+            <input name="confirmPassword" type="password" required minlength="8" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <button type="submit" class="bg-violet-700 hover:bg-violet-800 px-4 py-2 rounded text-white font-bold mt-2">Cadastrar</button>
+        </form>
+        <p class="text-center mt-4 text-zinc-400">Já tem conta? <a href="#" data-action="goto" data-page="login" class="text-violet-400 hover:underline">Entrar</a></p>
+      `;
+            }
+
+            function renderNewPost(editing = false, post = null) {
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">${editing ? "Editar Post" : "Novo Post"}</h2>
+        <form id="post-form" class="flex flex-col gap-3">
+          <label class="text-violet-200">Título
+            <input name="title" required value="${post?.title || ""}" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <label class="text-violet-200">Descrição
+            <input name="description" value="${post?.description || ""}" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <label class="text-violet-200">Imagem (URL)
+            <input name="image_url" value="${post?.image_url || ""}" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full"/>
+          </label>
+          <label class="text-violet-200">Conteúdo
+            <textarea name="content" required rows="7" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full">${post?.content || ""}</textarea>
+          </label>
+          <label class="text-violet-200">Categorias (Ctrl/Cmd para múltiplas)
+            <select name="categories" multiple class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white w-full">
+              ${state.categories
+                  .map(
+                      (cat) => `
+                <option value="${cat.name}" ${post?.categories?.map((c) => c.name ?? c).includes(cat.name) ? "selected" : ""}>${cat.name}</option>
+              `,
+                  )
+                  .join("")}
+            </select>
+          </label>
+          <button type="submit" class="bg-violet-700 hover:bg-violet-800 px-4 py-2 rounded text-white font-bold mt-2">${editing ? "Salvar" : "Criar"}</button>
+        </form>
+      `;
+            }
+
+            function renderCategories() {
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">Categorias</h2>
+        <form id="category-form" class="flex gap-2 mb-6 max-w-lg">
+          <input name="name" required maxlength="30" class="rounded bg-zinc-800 border border-violet-700 px-3 py-2 text-white flex-1" placeholder="Nova categoria"/>
+          <button type="submit" class="bg-violet-700 hover:bg-violet-800 px-4 py-2 rounded text-white font-bold">Criar</button>
+        </form>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-sm bg-zinc-800 rounded shadow-lg">
+            <thead>
+              <tr class="bg-violet-900 text-violet-200">
+                <th class="py-2 px-3 text-left">Nome</th>
+                <th class="py-2 px-3 text-left">Posts</th>
+                <th class="py-2 px-3 text-left">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${state.categories
+                  .map(
+                      (cat) => `
+                <tr class="border-b border-zinc-700">
+                  <td class="py-2 px-3">${cat.name}</td>
+                  <td class="py-2 px-3">${cat.post_count}</td>
+                  <td class="py-2 px-3">
+                    <button data-action="deleteCategory" data-id="${cat.id}" class="bg-red-700 hover:bg-red-800 px-3 py-1 rounded text-white text-xs">Excluir</button>
+                  </td>
+                </tr>
+              `,
+                  )
+                  .join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+            }
+
+            function renderDashboard() {
+                if (!state.dashboardStats) return "<p>Carregando...</p>";
+                const s = state.dashboardStats;
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">Dashboard</h2>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+          <div class="bg-violet-900/80 rounded-lg p-6 text-center shadow">
+            <div class="text-3xl font-bold text-violet-200">${s.total_posts}</div>
+            <div class="text-zinc-300 mt-1">Posts</div>
+          </div>
+          <div class="bg-violet-900/80 rounded-lg p-6 text-center shadow">
+            <div class="text-3xl font-bold text-violet-200">${s.total_views}</div>
+            <div class="text-zinc-300 mt-1">Visualizações</div>
+          </div>
+          <div class="bg-violet-900/80 rounded-lg p-6 text-center shadow">
+            <div class="text-3xl font-bold text-violet-200">${s.total_comments}</div>
+            <div class="text-zinc-300 mt-1">Comentários</div>
+          </div>
+          <div class="bg-violet-900/80 rounded-lg p-6 text-center shadow">
+            <div class="text-3xl font-bold text-violet-200">${s.total_users}</div>
+            <div class="text-zinc-300 mt-1">Usuários</div>
+          </div>
+        </div>
+      `;
+            }
+
+            function renderUsers() {
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">Usuários</h2>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-sm bg-zinc-800 rounded shadow-lg">
+            <thead>
+              <tr class="bg-violet-900 text-violet-200">
+                <th class="py-2 px-3 text-left">ID</th>
+                <th class="py-2 px-3 text-left">Usuário</th>
+                <th class="py-2 px-3 text-left">Email</th>
+                <th class="py-2 px-3 text-left">Admin</th>
+                <th class="py-2 px-3 text-left">Criado em</th>
+                <th class="py-2 px-3 text-left">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${state.users
+                  .map(
+                      (u) => `
+                <tr class="border-b border-zinc-700">
+                  <td class="py-2 px-3">${u.id}</td>
+                  <td class="py-2 px-3">${u.username}</td>
+                  <td class="py-2 px-3">${u.email}</td>
+                  <td class="py-2 px-3">
+                    ${u.is_admin ? "Sim" : "Não"}
+                    ${u.is_admin ? "" : `<button data-action="toggleAdmin" data-id="${u.id}" data-admin="true" class="bg-violet-700 hover:bg-violet-800 px-2 py-1 rounded text-white text-xs ml-2">Tornar Admin</button>`}
+                    ${u.is_admin && state.user.id !== u.id ? `<button data-action="toggleAdmin" data-id="${u.id}" data-admin="false" class="bg-red-700 hover:bg-red-800 px-2 py-1 rounded text-white text-xs ml-2">Remover Admin</button>` : ""}
+                  </td>
+                  <td class="py-2 px-3">${formatDate(u.created_at)}</td>
+                  <td class="py-2 px-3">
+                    ${state.user.id !== u.id ? `<button data-action="deleteUser" data-id="${u.id}" class="bg-red-700 hover:bg-red-800 px-3 py-1 rounded text-white text-xs">Excluir</button>` : ""}
+                  </td>
+                </tr>
+              `,
+                  )
+                  .join("")}
+            </tbody>
+          </table>
+        </div>
+      `;
+            }
+
+            function renderModeration() {
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">Moderação de Comentários</h2>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-sm bg-zinc-800 rounded shadow-lg">
+            <thead>
+              <tr class="bg-violet-900 text-violet-200">
+                <th class="py-2 px-3 text-left">ID</th>
+                <th class="py-2 px-3 text-left">Comentário</th>
+                <th class="py-2 px-3 text-left">Autor</th>
+                <th class="py-2 px-3 text-left">Post</th>
+                <th class="py-2 px-3 text-left">Data</th>
+                <th class="py-2 px-3 text-left">Ações</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${
+                  state.moderationComments.length === 0
+                      ? `<tr><td colspan="6" class="text-center text-zinc-400 py-4">Nenhum comentário para moderação.</td></tr>`
+                      : state.moderationComments
+                            .map(
+                                (c) => `
+                  <tr class="border-b border-zinc-700">
+                    <td class="py-2 px-3">${c.id}</td>
+                    <td class="py-2 px-3">${c.content}</td>
+                    <td class="py-2 px-3">${c.author}</td>
+                    <td class="py-2 px-3"><a href="#" data-action="loadPost" data-id="${c.post_id}" class="text-violet-400 hover:underline">${c.post_title}</a></td>
+                    <td class="py-2 px-3">${formatDate(c.created_at)}</td>
+                    <td class="py-2 px-3">
+                      <button data-action="approveComment" data-id="${c.id}" class="bg-violet-700 hover:bg-violet-800 px-2 py-1 rounded text-white text-xs">Aprovar</button>
+                      <button data-action="rejectComment" data-id="${c.id}" class="bg-red-700 hover:bg-red-800 px-2 py-1 rounded text-white text-xs ml-2">Rejeitar</button>
+                    </td>
+                  </tr>
+                `,
+                            )
+                            .join("")
+              }
+            </tbody>
+          </table>
+        </div>
+      `;
+            }
+
+            function renderMyPosts() {
+                const myposts = state.posts.filter(
+                    (p) => p.author === state.user.username,
+                );
+                return `
+        <h2 class="text-2xl font-bold mb-4 text-violet-300">Meus Posts</h2>
+        <div class="flex flex-col gap-6">
+        ${
+            myposts.length === 0
+                ? "<p class='text-zinc-400'>Você não criou nenhum post ainda.</p>"
+                : myposts
+                      .map(
+                          (post) => `
+          <article class="card bg-zinc-800 rounded-lg shadow-lg flex flex-col md:flex-row gap-4 p-4 relative group hover:shadow-2xl transition">
+            ${post.image_url ? `<img src="${post.image_url}" class="w-full md:w-48 h-36 object-cover rounded-lg border-2 border-violet-800" alt="Capa do post">` : ""}
+            <div class="flex-1 flex flex-col justify-between">
+              <header>
+                <h3 class="post-title font-bold text-xl text-violet-400 cursor-pointer hover:underline" data-action="loadPost" data-id="${post.id}">${post.title}</h3>
+                <div class="flex gap-2 flex-wrap mt-1 text-sm">${post.categories.map((c) => `<span class="bg-violet-900/70 text-violet-200 px-2 py-0.5 rounded">${c}</span>`).join(" ")}</div>
+              </header>
+              <p class="mt-2 text-zinc-300 line-clamp-2">${post.description || ""}</p>
+              <footer class="flex items-center gap-2 mt-3 text-xs text-zinc-400">
+                <span class="inline-flex items-center gap-1"><svg class="w-4 h-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7" /></svg> ${post.author}</span>
+                <span>•</span>
+                <span>${formatDate(post.created_at)}</span>
+                <span>•</span>
+                <span class="inline-flex items-center gap-1"><svg class="w-4 h-4 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553 2.276A2 2 0 0121 14.118V17a2 2 0 01-2 2H5a2 2 0 01-2-2v-2.882a2 2 0 01.447-1.842L8 10" /></svg> ${post.views} visualizações</span>
+              </footer>
+              <div class="mt-4 flex gap-2">
+                <button data-action="goto" data-page="editpost" data-id="${post.id}" class="bg-violet-700 hover:bg-violet-800 px-4 py-1 rounded text-white font-bold">Editar</button>
+                <button data-action="deletePost" data-id="${post.id}" class="bg-red-700 hover:bg-red-800 px-4 py-1 rounded text-white font-bold">Excluir</button>
+              </div>
+            </div>
+          </article>
+        `,
+                      )
+                      .join("")
+        }
+        </div>
+      `;
+            }
+
+            // --- Main Render ---
+            function render() {
+                renderNavbar();
+                let html = "";
+                if (state.error)
+                    html += `<div class="bg-red-800/80 text-red-100 rounded px-4 py-2 mb-4">${state.error}</div>`;
+                if (state.success)
+                    html += `<div class="bg-green-800/80 text-green-100 rounded px-4 py-2 mb-4">${state.success}</div>`;
+                switch (state.current) {
+                    case "home":
+                        html += renderHome();
+                        break;
+                    case "post":
+                        html += renderPost();
+                        break;
+                    case "login":
+                        html += renderLogin();
+                        break;
+                    case "register":
+                        html += renderRegister();
+                        break;
+                    case "newpost":
+                        html += isLogged()
+                            ? renderNewPost()
+                            : "<p class='text-zinc-400'>Faça login.</p>";
+                        break;
+                    case "editpost":
+                        html += isLogged()
+                            ? renderNewPost(true, state.currentPost)
+                            : "<p class='text-zinc-400'>Faça login.</p>";
+                        break;
+                    case "categories":
+                        html += isLogged()
+                            ? renderCategories()
+                            : "<p class='text-zinc-400'>Faça login.</p>";
+                        break;
+                    case "dashboard":
+                        html += isAdmin()
+                            ? renderDashboard()
+                            : "<p class='text-zinc-400'>Acesso restrito.</p>";
+                        break;
+                    case "users":
+                        html += isAdmin()
+                            ? renderUsers()
+                            : "<p class='text-zinc-400'>Acesso restrito.</p>";
+                        break;
+                    case "moderation":
+                        html += isAdmin()
+                            ? renderModeration()
+                            : "<p class='text-zinc-400'>Acesso restrito.</p>";
+                        break;
+                    case "myposts":
+                        html += isLogged()
+                            ? renderMyPosts()
+                            : "<p class='text-zinc-400'>Faça login.</p>";
+                        break;
+                    default:
+                        html += "<p>Página não encontrada.</p>";
+                }
+                document.getElementById("app").innerHTML = html;
+                registerPageListeners();
+            }
+
+            // --- Event Delegation ---
+            function registerGlobalListeners() {
+                document
+                    .getElementById("navbar")
+                    .addEventListener("click", function (event) {
+                        const btn = event.target.closest("button");
+                        if (!btn) return;
+                        const action = btn.dataset.action;
+                        if (action === "goto") {
+                            goto(btn.dataset.page);
+                        } else if (action === "logout") {
+                            doLogout();
+                        }
+                    });
+            }
+
+            function registerPageListeners() {
+                const app = document.getElementById("app");
+                app.onclick = async function (event) {
+                    const el = event.target.closest("[data-action]");
+                    if (!el) return;
+                    const action = el.dataset.action;
+                    if (action === "goto") {
+                        if (el.dataset.page === "editpost") {
+                            const post =
+                                state.posts.find(
+                                    (p) => p.id == el.dataset.id,
+                                ) || state.currentPost;
+                            setState({
+                                current: "editpost",
+                                currentPost: post,
+                            });
+                        } else {
+                            goto(el.dataset.page);
+                        }
+                    } else if (action === "loadPost") {
+                        // Incrementa view só se for diferente do último post visualizado
+                        if (state.viewPostId !== el.dataset.id) {
+                            state.viewPostId = el.dataset.id;
+                        }
+                        await loadPost(el.dataset.id);
+                    } else if (action === "deletePost") {
+                        deletePost(el.dataset.id);
+                    } else if (action === "deleteCategory") {
+                        deleteCategory(el.dataset.id);
+                    } else if (action === "approveComment") {
+                        approveComment(el.dataset.id);
+                    } else if (action === "rejectComment") {
+                        const reason = prompt("Motivo da rejeição:");
+                        if (reason !== null)
+                            rejectComment(el.dataset.id, reason);
+                    } else if (action === "toggleAdmin") {
+                        toggleAdmin(el.dataset.id, el.dataset.admin === "true");
+                    } else if (action === "deleteUser") {
+                        deleteUser(el.dataset.id);
+                    }
+                    event.preventDefault();
+                };
+
+                // Form listeners
+                if (document.getElementById("login-form")) {
+                    document.getElementById("login-form").onsubmit = doLogin;
+                }
+                if (document.getElementById("register-form")) {
+                    document.getElementById("register-form").onsubmit =
+                        doRegister;
+                }
+                if (document.getElementById("post-form")) {
+                    document.getElementById("post-form").onsubmit = function (
+                        ev,
+                    ) {
+                        createOrEditPost(
+                            ev,
+                            state.current === "editpost",
+                            state.currentPost?.id,
+                        );
+                    };
+                }
+                if (document.getElementById("category-form")) {
+                    document.getElementById("category-form").onsubmit =
+                        createCategory;
+                }
+                if (document.getElementById("comment-form")) {
+                    document.getElementById("comment-form").onsubmit =
+                        function (ev) {
+                            addComment(ev, state.currentPost.id);
+                        };
+                }
+            }
+
+            // --- Start App ---
+            init();
+        </script>
+    </body>
+</html>
