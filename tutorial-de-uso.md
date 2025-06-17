@@ -29,7 +29,7 @@ npm install
 ```
 
 # Passo 5
-Faça as [alterações](https://github.com/Hsyst/BloggySource/tree/main#possiveis-altera%C3%A7%C3%B5es-no-c%C3%B3digo) no [index.js](https://github.com/Hsyst/BloggySource/blob/main/index.js)
+Faça as [alterações](https://github.com/op3ny/BloggySource/tree/main#possiveis-altera%C3%A7%C3%B5es-no-c%C3%B3digo) no [index.js](https://github.com/op3ny/BloggySource/blob/main/index.js)
 
 # Passo 6
 Realize a primeira execução
