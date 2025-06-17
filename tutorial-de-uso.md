@@ -11,7 +11,7 @@ Ter [NodeJS e NPM](https://nodejs.org/en/download)
 Realizar o download do BloggySource
 
 ```bash
-git clone https://github.com/Hsyst/BloggySource
+git clone https://github.com/op3ny/BloggySource
 ```
 
 # Passo 3
