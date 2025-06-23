@@ -150,7 +150,9 @@ function initializeDatabase() {
     db.run(`CREATE TABLE IF NOT EXISTS categories (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             name TEXT UNIQUE NOT NULL,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            created_by INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (created_by) REFERENCES users (id)
         )`);
 
     // Tabela de relacionamento post-categoria
@@ -1086,6 +1088,7 @@ app.get("/api/categories", async (req, res) => {
 // Rota para criar categoria
 app.post("/api/categories", requireAuth, async (req, res) => {
   const { name } = req.body;
+  const userId = req.session.userId;
 
   if (!name) {
     return res.status(400).json({ error: "Nome da categoria é obrigatório" });
@@ -1094,8 +1097,8 @@ app.post("/api/categories", requireAuth, async (req, res) => {
   try {
     const result = await new Promise((resolve, reject) => {
       db.run(
-        "INSERT INTO categories (name) VALUES (?)",
-        [name],
+        "INSERT INTO categories (name, created_by) VALUES (?, ?)",
+        [name, userId],
         function (err) {
           if (err) reject(err);
           else resolve(this);
@@ -1115,14 +1118,43 @@ app.post("/api/categories", requireAuth, async (req, res) => {
 // Rota para deletar categoria
 app.delete("/api/categories/:id", requireAuth, async (req, res) => {
   const categoryId = req.params.id;
+  const userId = req.session.userId;
+  const isAdmin = req.session.isAdmin;
 
   try {
+    // Primeiro verificar se a categoria existe e quem criou
+    const category = await new Promise((resolve, reject) => {
+      db.get(
+        `SELECT id, created_by 
+         FROM categories 
+         WHERE id = ?`,
+        [categoryId],
+        (err, row) => {
+          if (err) reject(err);
+          else resolve(row);
+        }
+      );
+    });
+
+    if (!category) {
+      return res.status(404).json({ error: "Categoria não encontrada" });
+    }
+
+    // Verificar se o usuário é o criador ou admin
+    if (category.created_by !== userId && !isAdmin) {
+      return res.status(403).json({ 
+        error: "Apenas o criador da categoria ou administradores podem excluí-la" 
+      });
+    }
+
+    // Se passar nas verificações, deletar a categoria
     await new Promise((resolve, reject) => {
       db.run("DELETE FROM categories WHERE id = ?", [categoryId], (err) => {
         if (err) reject(err);
         else resolve();
       });
     });
+    
     res.json({ message: "Categoria excluída com sucesso" });
   } catch (err) {
     console.error("Erro ao excluir categoria:", err);
